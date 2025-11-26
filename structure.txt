@@ -1,0 +1,11 @@
+src/
+├── api/
+│   └── chatService.js       # Handles backend API calls
+├── components/
+│   ├── ChatInput.jsx        # Input box & Mic button
+│   └── ChatResponse.jsx     # Displays Answer & Context
+├── hooks/
+│   └── useSpeechToText.js   # Encapsulates Web Speech API logic
+├── store/
+│   └── useChatStore.js      # Zustand store for app state
+└── App.jsx                  # Main layout
