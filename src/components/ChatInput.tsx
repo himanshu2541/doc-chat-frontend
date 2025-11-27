@@ -1,12 +1,12 @@
 import React from 'react';
 import { Mic, MicOff, Send, Loader2 } from 'lucide-react';
 import { useChatStore } from '../store/useChatStore';
-import { useSpeechToText } from '../hooks/useSpeechToText';
+import { useWebsocketForAudio } from '../hooks/useWebsocketForAudio';
 
 const ChatInput: React.FC = () => {
   const { query, setQuery, sendMessage, isLoading, isListening } = useChatStore();
-  const { toggleListening, isSupported } = useSpeechToText();
-
+  const { toggleListening, isSupported } = useWebsocketForAudio();
+  
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();

@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { sendChatQuery } from '../api/chatService';
 import type { DocumentContext } from '../api/chatService';
 
-
 export interface ChatStore {
   query: string;
   answer: string;
@@ -13,6 +12,11 @@ export interface ChatStore {
   
   setQuery: (query: string) => void;
   setIsListening: (isListening: boolean) => void;
+
+  setLoading: (isLoading: boolean) => void;
+  setResponse: (answer: string, context: DocumentContext[]) => void;
+  setError: (error: string | null) => void;
+  
   sendMessage: (textQuery?: string) => Promise<void>;
   resetChat: () => void;
 }
@@ -29,6 +33,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   // Actions
   setQuery: (query) => set({ query }),
   setIsListening: (isListening) => set({ isListening }),
+  
+  setLoading: (isLoading) => set({ isLoading }),
+  setResponse: (answer, context) => set({ answer, context, isLoading: false }),
+  setError: (error) => set({ error, isLoading: false }),
 
   sendMessage: async (textQuery?: string) => {
     const currentQuery = textQuery || get().query;
