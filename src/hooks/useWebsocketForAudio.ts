@@ -2,13 +2,20 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useChatStore } from "../store/useChatStore";
 
-const WS_URL = "ws://localhost:8000/ws/chat";
+const WS_URL = "ws://localhost:8000/api/v1/ws/chat";
 const SILENCE_THRESHOLD = 10; // Amplitude threshold (0-255). Adjust if too sensitive.
 const SILENCE_KX_TIMEOUT = 2000; // Time in ms to wait before stopping (e.g., 2 seconds)
 
 export const useWebsocketForAudio = () => {
-  const { setIsListening, isListening, setLoading, addMessage, setError } =
-    useChatStore();
+  const {
+    setIsListening,
+    isListening,
+    setLoading,
+    addMessage,
+    setError,
+    updateMessageContent,
+    appendMessageContent,
+  } = useChatStore();
 
   const socketRef = useRef<WebSocket | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -18,6 +25,9 @@ export const useWebsocketForAudio = () => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   // const silenceTimerRef = useRef<number | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+
+  const currentTranscriptId = useRef<string | null>(null);
+  const currentResponseId = useRef<string | null>(null);
 
   const [isSupported, setIsSupported] = useState<boolean>(false);
 
@@ -90,7 +100,6 @@ export const useWebsocketForAudio = () => {
         .forEach((track) => track.stop());
     }
 
-    // Close Socket & Wait for Answer
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       socketRef.current.send("END");
       setLoading(true);
@@ -162,29 +171,75 @@ export const useWebsocketForAudio = () => {
         try {
           const data = JSON.parse(event.data);
 
-          if (data.error) {
-            setError(data.error);
-            socket.close();
-            setLoading(false);
-            return;
+          // Handles transcription
+          if (data.event === "transcription") {
+            // If we don't have a bubble for this user speech yet, create one
+            if (!currentTranscriptId.current) {
+              const newId = crypto.randomUUID();
+              currentTranscriptId.current = newId;
+              addMessage({ id: newId, role: "user", content: "" });
+            }
+
+            // Just update the text of that specific ID
+            updateMessageContent(currentTranscriptId.current, data.text);
           }
 
-          // 1. Handle User Query (Intermediate update)
-          const userQuery = data.query || data.transcript;
-          if (userQuery) {
-            addMessage({ role: "user", content: userQuery });
-            // Note: We DO NOT close socket or stop loading here.
-            // We keep waiting for the answer.
+          if (data.event === "listening") {
+            // Finalize the user message bubble
+            
           }
 
-          if (data.answer) {
-            addMessage({
-              role: "assistant",
-              content: data.answer,
-              context: data.context || [],
-            });
+          if (data.event === "context") {
+            // Start the Assistant bubble early with the context loaded
+            if (!currentResponseId.current) {
+              const newId = crypto.randomUUID();
+              currentResponseId.current = newId;
+
+              addMessage({
+                id: newId,
+                role: "assistant",
+                content: "", // Text will come later
+                context: data.contexts || [], // Load context immediately
+              });
+            } else {
+              // If bubble exists (rare), update it
+              appendMessageContent(
+                currentResponseId.current,
+                "",
+                data.contexts
+              );
+            }
+          }
+
+          // Handles response (Assistant answer)
+          // Backend sends event: "answer" when complete
+          if (data.event === "answer") {
+            setLoading(false);
+
+            if (!currentResponseId.current) {
+              const newId = crypto.randomUUID();
+              currentResponseId.current = newId;
+              addMessage({ id: newId, role: "assistant", content: "" });
+            }
+
+            // Append text
+            appendMessageContent(currentResponseId.current, data.text);
+          }
+
+          if (data.event === "done") {
             socket.close();
             setLoading(false);
+            // Clear refs for next turn
+            currentTranscriptId.current = null;
+            currentResponseId.current = null;
+          }
+
+          if (data.event === "error") {
+            setError(data.text || "Error processing audio");
+            socket.close();
+            setLoading(false);
+            currentTranscriptId.current = null;
+            currentResponseId.current = null;
           }
         } catch (e) {
           console.error("JSON Parse Error:", e);
