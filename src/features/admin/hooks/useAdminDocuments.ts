@@ -4,51 +4,31 @@ import {
   syncVectors,
   deleteVector,
   getDocuments,
-  type UploadResponse,
+  type DocumentMeta,
 } from "../api/adminService";
-import { useAdminWebSocket } from "./useAdminWebSocket";
+import { useAdminWebSocket, type JobUpdateMessage } from "./useAdminWebSocket";
 
 export interface AdminFile {
   doc_id: string;
   filename: string;
   status: "uploaded" | "syncing" | "synced" | "error";
   message?: string;
-  path?: string;
 }
 
 export const useAdminDocuments = () => {
   const [files, setFiles] = useState<AdminFile[]>([]);
-  const [isUploading, setIsUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
 
-  useEffect(() => {
-    const loadDocs = async () => {
-      try {
-        const docs = await getDocuments();
-        // Map backend format to UI format
-        const mappedFiles: AdminFile[] = docs.map((d) => ({
-          doc_id: d.doc_id,
-          filename: d.filename,
-          status: d.status as any, // Cast to your union type
-          message: `Ingested on ${new Date(d.timestamp).toLocaleDateString()}`,
-        }));
-        setFiles(mappedFiles);
-      } catch (err) {
-        console.error("Failed to load documents", err);
-      }
-    };
-    loadDocs();
-  }, []);
-
+  // 1. Listen for updates (Single connection, no retries)
   useAdminWebSocket(
-    useCallback((data) => {
+    useCallback((data: JobUpdateMessage) => {
       setFiles((prev) =>
         prev.map((f) => {
           if (f.doc_id === data.doc_id) {
             return {
               ...f,
-              status: data.status === "completed" ? "synced" : "error",
-              message: data.message,
+              status: data.status === "Completed" ? "synced" : "error",
+              message: data.status === "Completed" ? "Synced" : "Failed",
             };
           }
           return f;
@@ -57,64 +37,83 @@ export const useAdminDocuments = () => {
     }, [])
   );
 
-  const handleUpload = async (file: File) => {
-    setIsUploading(true);
-    setError(null);
+  // 2. Fetch List
+  const fetchDocuments = useCallback(async () => {
+    setLoading(true);
     try {
-      const res = await uploadFile(file);
-      const newFile: AdminFile = {
-        doc_id: res.doc_id,
-        filename: file.name,
-        path: res.path,
-        status: "uploaded",
-      };
-      setFiles((prev) => [newFile, ...prev]);
-    } catch (err: any) {
-      setError(err.message || "Upload failed");
+      const docs: DocumentMeta[] = await getDocuments();
+      
+      const mapped: AdminFile[] = docs.map((d) => ({
+        doc_id: d.doc_id,
+        filename: d.filename,
+        status: d.status === "Completed" ? "synced" : "uploaded",
+        message: d.status === "Completed" ? "Synced" : "Ingested",
+      }));
+      
+      setFiles(mapped);
+    } catch (error: unknown) {
+      console.error("Fetch Documents Error:", error);
     } finally {
-      setIsUploading(false);
+      setLoading(false);
     }
-  };
+  }, []);
 
+  // 3. Actions
   const handleSync = async (file: AdminFile) => {
+    // Optimistic Update
     setFiles((prev) =>
       prev.map((f) =>
-        f.doc_id === file.doc_id ? { ...f, status: "syncing" } : f
+        f.doc_id === file.doc_id
+          ? { ...f, status: "syncing", message: "Processing..." }
+          : f
       )
     );
 
     try {
-      await syncVectors(file.doc_id, file.filename || "");
-      // Note: We don't set 'synced' here immediately.
-      // We wait for the WebSocket to tell us it's actually done.
-    } catch (err: any) {
+      await syncVectors(file.doc_id, file.filename);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Start Failed";
       setFiles((prev) =>
         prev.map((f) =>
           f.doc_id === file.doc_id
-            ? { ...f, status: "error", message: err.message }
+            ? { ...f, status: "error", message: errorMessage }
             : f
         )
       );
     }
   };
 
-  // 4. Delete Action
-  const handleDelete = async (docId: string) => {
-    if (!confirm("Are you sure?")) return;
+  const handleUpload = async (file: File) => {
     try {
-      await deleteVector(docId);
-      setFiles((prev) => prev.filter((f) => f.doc_id !== docId));
-    } catch (err: any) {
-      alert(err.message);
+      const res = await uploadFile(file);
+      setFiles((prev) => [
+        {
+          doc_id: res.doc_id,
+          filename: file.name,
+          status: "uploaded",
+          message: "Ready",
+        },
+        ...prev,
+      ]);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Upload failed";
+      alert(errorMessage);
     }
   };
 
-  return {
-    files,
-    isUploading,
-    error,
-    handleUpload,
-    handleSync,
-    handleDelete,
+  const handleDelete = async (docId: string) => {
+    if (!confirm("Delete?")) return;
+    try {
+      await deleteVector(docId);
+      setFiles((prev) => prev.filter((f) => f.doc_id !== docId));
+    } catch (error: unknown) {
+      console.error("Delete Error", error);
+    }
   };
+
+  useEffect(() => {
+    fetchDocuments();
+  }, [fetchDocuments]);
+
+  return { files, loading, fetchDocuments, handleSync, handleUpload, handleDelete };
 };
