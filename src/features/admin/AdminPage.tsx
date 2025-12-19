@@ -11,6 +11,7 @@ const AdminPage: React.FC = () => {
     fetchDocuments, 
     handleSync, 
     handleUpload, 
+    isUploading,
     handleDelete 
   } = useAdminDocuments();
 
@@ -27,7 +28,7 @@ const AdminPage: React.FC = () => {
         </button>
       </div>
 
-      <UploadWidget onUpload={handleUpload} isUploading={false} error={null} />
+      <UploadWidget onUpload={handleUpload} isUploading={isUploading} error={null} />
 
       <DocumentList 
         files={files} 

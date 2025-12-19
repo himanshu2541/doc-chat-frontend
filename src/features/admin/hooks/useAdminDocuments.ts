@@ -13,22 +13,37 @@ export interface AdminFile {
   filename: string;
   status: "uploaded" | "syncing" | "synced" | "error";
   message?: string;
+  timestamp?: string;
 }
 
 export const useAdminDocuments = () => {
   const [files, setFiles] = useState<AdminFile[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
 
-  // 1. Listen for updates (Single connection, no retries)
+  // 1. Listen for WebSocket updates
   useAdminWebSocket(
     useCallback((data: JobUpdateMessage) => {
       setFiles((prev) =>
         prev.map((f) => {
           if (f.doc_id === data.doc_id) {
+            const isSuccess = data.status === "Completed";
+            const isError = data.status === "Failed";
+            const isProcessing = data.status === "Processing";
+
+            let newStatus: AdminFile["status"] = f.status;
+            
+            // Logic to clear "stuck" processing state
+            if (isSuccess) newStatus = "synced";
+            else if (isError) newStatus = "error";
+            else if (isProcessing) newStatus = "syncing";
+
             return {
               ...f,
-              status: data.status === "Completed" ? "synced" : "error",
-              message: data.status === "Completed" ? "Synced" : "Failed",
+              status: newStatus,
+              message: data.message || data.status,
+              // Update timestamp to now if the job just completed
+              timestamp: isSuccess ? (f.timestamp || new Date().toISOString()) : f.timestamp,
             };
           }
           return f;
@@ -42,14 +57,23 @@ export const useAdminDocuments = () => {
     setLoading(true);
     try {
       const docs: DocumentMeta[] = await getDocuments();
-      
-      const mapped: AdminFile[] = docs.map((d) => ({
-        doc_id: d.doc_id,
-        filename: d.filename,
-        status: d.status === "Completed" ? "synced" : "uploaded",
-        message: d.status === "Completed" ? "Synced" : "Ingested",
-      }));
-      
+
+      const mapped: AdminFile[] = docs.map((d) => {
+        // Map backend status to frontend status to prevent "stuck" states on refresh
+        let status: AdminFile["status"] = "uploaded";
+        if (d.status === "Completed") status = "synced";
+        else if (d.status === "Failed") status = "error";
+        else if (d.status === "Processing") status = "syncing";
+
+        return {
+          doc_id: d.doc_id,
+          filename: d.filename,
+          status: status,
+          message: d.status === "Completed" ? "Synced" : d.status,
+          timestamp: d.timestamp, // Capture the timestamp from API
+        };
+      });
+
       setFiles(mapped);
     } catch (error: unknown) {
       console.error("Fetch Documents Error:", error);
@@ -60,11 +84,11 @@ export const useAdminDocuments = () => {
 
   // 3. Actions
   const handleSync = async (file: AdminFile) => {
-    // Optimistic Update
+    // Optimistic Update: Set to syncing immediately
     setFiles((prev) =>
       prev.map((f) =>
         f.doc_id === file.doc_id
-          ? { ...f, status: "syncing", message: "Processing..." }
+          ? { ...f, status: "syncing", message: "Starting sync..." }
           : f
       )
     );
@@ -72,7 +96,8 @@ export const useAdminDocuments = () => {
     try {
       await syncVectors(file.doc_id, file.filename);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Start Failed";
+      const errorMessage =
+        error instanceof Error ? error.message : "Start Failed";
       setFiles((prev) =>
         prev.map((f) =>
           f.doc_id === file.doc_id
@@ -84,6 +109,7 @@ export const useAdminDocuments = () => {
   };
 
   const handleUpload = async (file: File) => {
+    setIsUploading(true);
     try {
       const res = await uploadFile(file);
       setFiles((prev) => [
@@ -91,13 +117,17 @@ export const useAdminDocuments = () => {
           doc_id: res.doc_id,
           filename: file.name,
           status: "uploaded",
-          message: "Ready",
+          message: "Ready to sync",
+          timestamp: new Date().toISOString(),
         },
         ...prev,
       ]);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Upload failed";
+      const errorMessage =
+        error instanceof Error ? error.message : "Upload failed";
       alert(errorMessage);
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -115,5 +145,13 @@ export const useAdminDocuments = () => {
     fetchDocuments();
   }, [fetchDocuments]);
 
-  return { files, loading, fetchDocuments, handleSync, handleUpload, handleDelete };
+  return {
+    files,
+    loading,
+    isUploading,
+    fetchDocuments,
+    handleSync,
+    handleUpload,
+    handleDelete,
+  };
 };
